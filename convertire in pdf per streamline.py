@@ -1,87 +1,67 @@
 import re
 import os
+import zipfile
+import streamlit as st
 
-def extract_pdf_from_p7m(input_file, output_dir):
+def extract_pdf_from_p7m(contents, file_name):
     """
-    Estrae un file PDF da un file .p7m non compresso, includendo tutto dal primo %PDF- all'ultimo %%EOF.
+    Estrae un file PDF da contenuti binari di un file .p7m, includendo tutto dal primo %PDF- all'ultimo %%EOF.
     
     Parametri:
-        input_file (str): Percorso del file .p7m da processare.
-        output_dir (str): Percorso della cartella di destinazione per il PDF estratto.
+        contents (bytes): Contenuti del file .p7m.
+        file_name (str): Nome del file per riferimenti.
+    
+    Ritorna:
+        bytes: Contenuto del PDF estratto.
     """
-    # Legge il contenuto del file p7m
-    with open(input_file, 'rb') as f:
-        contents = f.read()
-
-    # Cerca il primo %PDF- e l'ultimo %%EOF
     pdf_pattern = re.compile(rb'%PDF-.*%%EOF', re.MULTILINE | re.DOTALL)
     match = pdf_pattern.search(contents)
 
     if not match:
-        raise ValueError(f"Nessun contenuto PDF trovato nel file '{input_file}'.")
+        raise ValueError(f"Nessun contenuto PDF trovato in '{file_name}'.")
 
-    pdf_contents = match.group()
+    return match.group()
 
-    # Determina il nome del file di output
-    output_file = os.path.join(output_dir, os.path.basename(input_file).replace('.p7m', '.pdf'))
-
-    # Scrive il contenuto PDF estratto in un nuovo file
-    with open(output_file, 'wb') as f:
-        f.write(pdf_contents)
-
-    print(f"PDF estratto con successo: {output_file}")
-
-def process_p7m_directory(input_dir, output_dir):
+def process_zip_file(zip_file):
     """
-    Elabora tutti i file .p7m in una cartella e salva i PDF estratti in un'altra cartella.
+    Elabora un archivio ZIP contenente file .p7m e restituisce un archivio ZIP con i PDF estratti.
     
     Parametri:
-        input_dir (str): Percorso della cartella contenente i file .p7m.
-        output_dir (str): Percorso della cartella di destinazione per i PDF estratti.
+        zip_file (UploadedFile): Archivio ZIP caricato dall'utente.
+    
+    Ritorna:
+        bytes: Archivio ZIP con i PDF estratti.
     """
-    if not os.path.isdir(input_dir):
-        raise NotADirectoryError(f"La cartella '{input_dir}' non esiste.")
+    output_zip_path = "extracted_pdfs.zip"
+    with zipfile.ZipFile(zip_file, 'r') as z_in, zipfile.ZipFile(output_zip_path, 'w') as z_out:
+        for file_name in z_in.namelist():
+            if file_name.lower().endswith('.p7m'):
+                try:
+                    # Leggi i contenuti del file .p7m
+                    contents = z_in.read(file_name)
+                    # Estrai il contenuto del PDF
+                    pdf_contents = extract_pdf_from_p7m(contents, file_name)
+                    # Salva il PDF nell'archivio ZIP di output
+                    pdf_name = file_name.replace('.p7m', '.pdf')
+                    z_out.writestr(pdf_name, pdf_contents)
+                except Exception as e:
+                    st.warning(f"Errore durante l'elaborazione di '{file_name}': {e}")
 
-    # Crea la cartella di output se non esiste
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    # Leggi il contenuto dell'archivio ZIP risultante
+    with open(output_zip_path, 'rb') as f:
+        return f.read()
 
-    # Processa ogni file .p7m nella cartella
-    p7m_files = [f for f in os.listdir(input_dir) if f.lower().endswith('.p7m')]
-    if not p7m_files:
-        print(f"Nessun file .p7m trovato nella cartella '{input_dir}'.")
-        return
+# Interfaccia Streamlit
+st.title("Estrazione PDF da file P7M")
 
-    for file_name in p7m_files:
-        input_file = os.path.join(input_dir, file_name)
-        try:
-            extract_pdf_from_p7m(input_file, output_dir)
-        except Exception as e:
-            print(f"Errore durante l'elaborazione di '{file_name}': {e}")
+uploaded_zip = st.file_uploader("Carica un file ZIP contenente file .p7m:", type="zip")
 
-# Interfaccia interattiva per Jupyter Notebook
-def process_p7m_files_in_bulk():
-    """
-    Permette all'utente di specificare una cartella di input con file .p7m e una cartella di output.
-    """
-    # Chiedi il percorso della cartella di input
-    input_dir = input("Inserisci il percorso completo della cartella contenente i file .p7m: ").strip()
-    if not os.path.isdir(input_dir):
-        print(f"Errore: La cartella '{input_dir}' non esiste.")
-        return
-
-    # Chiedi il percorso della cartella di output
-    output_dir = input("Inserisci il percorso completo della cartella di destinazione: ").strip()
-    if not os.path.exists(output_dir):
-        create_dir = input(f"La cartella '{output_dir}' non esiste. Vuoi crearla? (s/n): ").strip().lower()
-        if create_dir == 's':
-            os.makedirs(output_dir)
-        else:
-            print("Operazione annullata.")
-            return
-
-    # Processa la cartella
-    process_p7m_directory(input_dir, output_dir)
-
-# Esegui la funzione interattiva
-process_p7m_files_in_bulk()
+if uploaded_zip is not None:
+    try:
+        # Processa il file ZIP
+        result_zip = process_zip_file(uploaded_zip)
+        # Offri il download del file ZIP con i PDF estratti
+        st.success("Elaborazione completata! Scarica l'archivio ZIP con i PDF estratti:")
+        st.download_button("Scarica PDF estratti", data=result_zip, file_name="extracted_pdfs.zip")
+    except Exception as e:
+        st.error(f"Si è verificato un errore durante l'elaborazione: {e}")
